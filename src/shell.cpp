@@ -9,6 +9,7 @@ static constexpr auto handlerKey = L"Software\\Classes\\AllFilesystemObjects\\sh
 static HMODULE module;
 static std::atomic<long> live{0};
 static constexpr const char* verbs[] = {"multi_copyname.names", "multi_copyname.stems", "multi_copyname.paths"};
+static constexpr const wchar_t* wideVerbs[] = {L"multi_copyname.names", L"multi_copyname.stems", L"multi_copyname.paths"};
 static constexpr const wchar_t* labels[] = {L"复制文件名（每行一个，含扩展名）", L"复制文件名（每行一个，不含扩展名）", L"复制完整路径（每行一个）"};
 
 class Menu final : public IShellExtInit, public IContextMenu {
@@ -63,15 +64,14 @@ public:
     HRESULT STDMETHODCALLTYPE InvokeCommand(CMINVOKECOMMANDINFO* info) override {
         if (!info) return E_POINTER;
         unsigned command = 3;
-        if (IS_INTRESOURCE(info->lpVerb)) command = LOWORD(info->lpVerb);
+        const bool wide = info->cbSize >= sizeof(CMINVOKECOMMANDINFOEX) && (info->fMask & CMIC_MASK_UNICODE);
+        const auto* extended = reinterpret_cast<const CMINVOKECOMMANDINFOEX*>(info);
+        if (wide && !IS_INTRESOURCE(extended->lpVerbW)) {
+            for (unsigned i = 0; i < 3; ++i) if (_wcsicmp(extended->lpVerbW, wideVerbs[i]) == 0) command = i;
+        } else if (IS_INTRESOURCE(info->lpVerb)) command = LOWORD(info->lpVerb);
         else {
-            const bool wide = info->cbSize >= sizeof(CMINVOKECOMMANDINFOEX) && (info->fMask & CMIC_MASK_UNICODE);
-            const auto* extended = reinterpret_cast<const CMINVOKECOMMANDINFOEX*>(info);
             for (unsigned i = 0; i < 3; ++i) {
-                if (wide && extended->lpVerbW && !IS_INTRESOURCE(extended->lpVerbW)) {
-                    std::wstring verb(verbs[i], verbs[i] + std::strlen(verbs[i]));
-                    if (_wcsicmp(extended->lpVerbW, verb.c_str()) == 0) command = i;
-                } else if (_stricmp(info->lpVerb, verbs[i]) == 0) command = i;
+                if (_stricmp(info->lpVerb, verbs[i]) == 0) command = i;
             }
         }
         if (command >= 3) return E_INVALIDARG;
