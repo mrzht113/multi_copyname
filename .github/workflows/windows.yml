@@ -1,0 +1,66 @@
+name: Windows build and release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish v1.0.0 release after successful tests
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure x64 Release
+        run: cmake -S . -B build -A x64 -DBUILD_TESTING=ON
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Unit and Windows shell integration tests
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Install and uninstall smoke test
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $process = Start-Process build/Release/multi_copyname.exe -ArgumentList '/install' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw 'Installation failed' }
+          $key = 'HKCU:\Software\Classes\AllFilesystemObjects\shellex\ContextMenuHandlers\multi_copyname'
+          if (!(Test-Path $key)) { throw 'Context menu registration missing' }
+          $process = Start-Process build/Release/multi_copyname.exe -ArgumentList '/uninstall' -Wait -PassThru
+          if ($process.ExitCode -ne 0 -or (Test-Path $key)) { throw 'Uninstallation failed' }
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Release/multi_copyname.exe, build/Release/multi_copyname_shell.dll, README.md, LICENSE dist/
+          Compress-Archive -Path dist/* -DestinationPath multi_copyname-v1.0.0-windows-x64.zip
+          $hash = (Get-FileHash multi_copyname-v1.0.0-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  multi_copyname-v1.0.0-windows-x64.zip" | Set-Content SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: multi_copyname-windows-x64
+          path: |
+            multi_copyname-v1.0.0-windows-x64.zip
+            SHA256SUMS.txt
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.ref }}'.StartsWith('refs/tags/')) { '${{ github.ref_name }}' } else { 'v1.0.0' }
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag multi_copyname-v1.0.0-windows-x64.zip SHA256SUMS.txt --clobber
+          } else {
+            gh release create $tag multi_copyname-v1.0.0-windows-x64.zip SHA256SUMS.txt --target '${{ github.sha }}' --title "multi_copyname $tag" --notes-file RELEASE_NOTES.md
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }
