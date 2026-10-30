@@ -118,7 +118,8 @@ public:
     HRESULT STDMETHODCALLTYPE LockServer(BOOL lock) override { if (lock) ++live; else --live; return S_OK; }
 };
 extern "C" BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) { module = instance; DisableThreadLibraryCalls(instance); }
+    // Static CRT needs thread attach/detach notifications.
+    if (reason == DLL_PROCESS_ATTACH) module = instance;
     return TRUE;
 }
 extern "C" HRESULT WINAPI DllCanUnloadNow() { return live == 0 ? S_OK : S_FALSE; }
